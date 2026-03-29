@@ -1,0 +1,73 @@
+#drop tcp any any -> $HOME_NET 80 (msg:"TEST Block All HTTP to Web Server";flow:to_server,established;sid:1000005;rev:1;)
+drop http any any -> $HOME_NET any (msg:"IPS DROP curl User-Agent"; flow:to_server,established; http.user_agent; content:"curl"; nocase; classtype:web-application-activity; sid:1000006; rev:2;)
+drop http any any -> $HOME_NET any (msg:"IPS DROP Path Traversal Attack";flow:to_server,established;http.uri;pcre:"/(\.\.(\/|\\|%2f|%5c|%252f)){2,}/i";classtype:web-application-attack; sid:1000020; rev:1;)
+drop http any any -> $HOME_NET any (msg:"IPS DROP Path Traversal"; \
+  flow:to_server,established; \
+  http.uri; \
+  pcre:"/(\.\.\/|\.\.\\|%2e%2e%2f|%2e%2e\/|\.\.%2f|%252e%252e)/i"; \
+  classtype:web-application-attack; sid:1000020; rev:2;)
+
+
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi UNION SELECT"; flow:to_server,established; http.uri; content:"union"; nocase;content:"select"; nocase; distance:0; within:20; classtype:web-application-attack; sid:1000023; rev:2;)
+# Matches exact browser encoding: 1%27%20OR%20%271%27=%271
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi OR Encoded Spaces"; flow:to_server,established; http.uri; content:"%27%20OR%20"; nocase; classtype:web-application-attack; sid:1000022; rev:5;)
+
+# Covers OR with + encoded spaces: 1%27+OR+%271%27=%271
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi OR Plus Spaces"; flow:to_server,established; http.uri; content:"%27+OR+"; nocase; classtype:web-application-attack; sid:1000040; rev:3;)
+
+# Covers raw unencoded: 1' OR '1'='1
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi OR Raw"; flow:to_server,established; http.uri; content:"' OR '"; nocase; classtype:web-application-attack; sid:1000041; rev:3;)
+
+# Catch any %27 followed by OR anywhere in URI
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi Quote OR Generic"; flow:to_server,established; http.uri; content:"%27"; nocase; content:"OR"; nocase; distance:0; within:15; classtype:web-application-attack; sid:1000042; rev:3;)
+
+# UNION SELECT
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi UNION SELECT"; flow:to_server,established; http.uri; content:"union"; nocase;content:"select"; nocase; distance:0; within:20; classtype:web-application-attack; sid:1000023; rev:3;)
+
+# Block any single quote encoded — broad catch-all
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi Any Quote"; flow:to_server,established; http.uri; content:"%27"; nocase; classtype:web-application-attack; sid:1000043; rev:2;)
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQL Injection - Classic"; \
+  flow:to_server,established; \
+  http.uri; \
+  pcre:"/(\'|%27)\s*(--|#|\/\*)/i"; \
+  classtype:web-application-attack; sid:1000024; rev:1;)
+drop http any any -> $HOME_NET any (msg:"IPS DROP XSS Script Tag"; \
+  flow:to_server,established; \
+  http.uri; \
+  pcre:"/<\s*script[\s>]/i"; \
+  classtype:web-application-attack; sid:1000025; rev:1;)
+
+drop http any any -> $HOME_NET any (msg:"IPS DROP XSS Event Handler"; \
+  flow:to_server,established; \
+  http.uri; \
+  pcre:"/on(load|error|click|mouseover|focus)\s*=/i"; \
+  classtype:web-application-attack; sid:1000026; rev:1;)
+# Rule A — catches raw pipe:  ?cmd=ls|id
+drop http any any -> $HOME_NET any (msg:"IPS DROP Command Injection Pipe"; flow:to_server,established; http.uri; content:"|7c|"; classtype:web-application-attack; sid:1000027; rev:4;)
+
+# Rule B — catches encoded pipe: ?cmd=ls%7cid
+drop http any any -> $HOME_NET any (msg:"IPS DROP Command Injection Pipe Encoded"; flow:to_server,established; http.uri; content:"%7c"; nocase; classtype:web-application-attack; sid:1000033; rev:1;)
+
+# Rule C — catches semicolons: ?cmd=cat;/etc/passwd
+drop http any any -> $HOME_NET any (msg:"IPS DROP Command Injection Semicolon"; flow:to_server,established; http.uri; content:"|3b|"; classtype:web-application-attack; sid:1000034; rev:1;)
+# Covers PowerShell/curl: '+OR+' with literal quotes and plus signs
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi OR Plus Literal Quote"; flow:to_server,established; http.uri; content:"'+OR+'"; nocase; classtype:web-application-attack; sid:1000045; rev:1;)
+
+# Covers raw: ' OR ' with literal quotes and spaces
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi OR Raw Quote Space"; flow:to_server,established; http.uri; content:"' OR '"; nocase; classtype:web-application-attack; sid:1000046; rev:1;)
+
+# Covers: %27+OR+%27 mixed encoding
+drop http any any -> $HOME_NET any (msg:"IPS DROP SQLi OR Mixed Encoding"; flow:to_server,established; http.uri; content:"%27+OR+%27"; nocase; classtype:web-application-attack; sid:1000047; rev:1;)
+#
+drop ip any any -> $HOME_NET any (msg:"IPS DROP GeoIP Non-India"; flow:to_server,established; geoip: src,!IN; classtype:policy-violation; sid:1000073; rev:1;)
+# HTTP Flood — block IP sending more than 100 requests in 10 seconds
+drop http any any -> $HOME_NET any (msg:"IPS DROP HTTP Flood"; flow:to_server,established; threshold: type both, track by_src, count100, seconds 10; classtype:attempted-dos; sid:1000060; rev:1;)
+
+# SSH Brute Force — more than 5 attempts in 60 seconds
+drop tcp any any -> $HOME_NET 22 (msg:"IPS DROP SSH Brute Force"; flow:to_server; flags:S; threshold: type both, track by_src, count5, seconds 60; classtype:attempted-admin; sid:1000061; rev:1;)
+
+# HTTP Login Brute Force — repeated POST to same endpoint
+drop http any any -> $HOME_NET any (msg:"IPS DROP HTTP Login Brute Force"; flow:to_server,established; http.method; content:"POST"; threshold: type both, track by_src, count 10, seconds 30; classtype:attempted-admin; sid:1000062; rev:1;)
+
+# Port Scan Detection — SYN to many ports
+drop tcp any any -> $HOME_NET any (msg:"IPS DROP Port Scan"; flags:S; threshold: type both, track by_src, count 20, seconds 5; classtype:network-scan; sid:1000063; rev:1;)
